@@ -17,9 +17,18 @@ Servo myservo;
 const char* ssid = "etienne";
 const char* password = "et140898";
 
-const int output = 2;
+// Direction
+const int servo_dir = 2;
+
+// Moteur
+const int motor_pwm = 12;
+const int motor_fwd = 13;
+const int motor_bwd = 15;
 
 String sliderValue = "0";
+String throttleValue = "0";
+
+int  acceleration;
 
 // setting PWM properties
 const int freq = 5000;
@@ -48,9 +57,13 @@ const char index_html[] PROGMEM = R"rawliteral(
   </style>
 </head>
 <body>
-  <h2>ESP Web Server</h2>
+  <h2>Go vroom vroom</h2>
+  <h3>Direction</h3>
   <p><span id="textSliderValue">%SLIDERVALUE%</span></p>
   <p><input type="range" onchange="updateSliderPWM(this)" id="pwmSlider" min="0" max="180" value="%SLIDERVALUE%" step="1" class="slider"></p>
+  <h3>Throttle</h3>
+  <p><span id="textThrottleValue">%THROTTLEVALUE%</span></p>
+  <p><input type="range" onchange="updateThrottlePWM(this)" id="pwmThrottle" min="-255" max="255" value="%THROTTLEVALUE%" step="1" class="slider"></p>
 <script>
 function updateSliderPWM(element) {
   var sliderValue = document.getElementById("pwmSlider").value;
@@ -58,6 +71,14 @@ function updateSliderPWM(element) {
   console.log(sliderValue);
   var xhr = new XMLHttpRequest();
   xhr.open("GET", "/slider?value="+sliderValue, true);
+  xhr.send();
+}
+function updateThrottlePWM(element) {
+  var throttleValue = document.getElementById("pwmThrottle").value;
+  document.getElementById("textThrottleValue").innerHTML = throttleValue;
+  console.log(throttleValue);
+  var xhr = new XMLHttpRequest();
+  xhr.open("GET", "/throttle?value="+throttleValue, true);
   xhr.send();
 }
 </script>
@@ -71,6 +92,9 @@ String processor(const String& var){
   if (var == "SLIDERVALUE"){
     return sliderValue;
   }
+  if (var == "THORTTLEVALUE"){
+    return throttleValue;
+  }
   return String();
 }
 
@@ -78,11 +102,17 @@ void setup(){
   // Serial port for debugging purposes
   Serial.begin(115200);
 
+//  Servo for direction
 	if (!myservo.attached()) {
 		myservo.setPeriodHertz(50); // standard 50 hz servo
-		myservo.attach(output, 500, 2500); // Attach the servo after it has been detatched
+		myservo.attach(servo_dir, 500, 2500);
 	}
-	myservo.write(0);
+	myservo.write(90);
+
+// H bridge for motor
+  pinMode(motor_pwm, OUTPUT);
+  pinMode(motor_fwd, OUTPUT);
+  pinMode(motor_bwd, OUTPUT);
 
   // Connect to Wi-Fi
   WiFi.begin(ssid, password);
@@ -107,6 +137,30 @@ void setup(){
       inputMessage = request->getParam(PARAM_INPUT)->value();
       sliderValue = inputMessage;
       myservo.write(sliderValue.toInt());
+    }
+    else {
+      inputMessage = "No message sent";
+    }
+    Serial.println(inputMessage);
+    request->send(200, "text/plain", "OK");
+  });
+
+  // Send a GET request to <ESP_IP>/throttle?value=<inputMessage>
+  server.on("/throttle", HTTP_GET, [] (AsyncWebServerRequest *request) {
+    String inputMessage;
+    // GET input1 value on <ESP_IP>/throttle?value=<inputMessage>
+    if (request->hasParam(PARAM_INPUT)) {
+      inputMessage = request->getParam(PARAM_INPUT)->value();
+      acceleration = inputMessage.toInt();
+      if (acceleration > 0) {
+        digitalWrite(motor_fwd, HIGH);
+        digitalWrite(motor_bwd, LOW);
+      }
+      else {
+        digitalWrite(motor_fwd, LOW);
+        digitalWrite(motor_bwd, HIGH);
+      }
+      analogWrite(motor_pwm, abs(acceleration));
     }
     else {
       inputMessage = "No message sent";
