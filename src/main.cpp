@@ -119,10 +119,12 @@ void startCamera() {
   config.pixel_format = PIXFORMAT_JPEG;
 
   // Initialisation de la caméra avec résolution
-  config.frame_size = FRAMESIZE_SVGA; // SVGA : 800x600
   // config.frame_size = FRAMESIZE_QVGA; // QVGA : 320x240
-  config.jpeg_quality = 12;
-  config.fb_count = 1;
+  // config.frame_size = FRAMESIZE_HVGA; // HVGA : 480x320
+  config.frame_size = FRAMESIZE_VGA; // VGA : 640x480
+  // config.frame_size = FRAMESIZE_SVGA; // SVGA : 800x600
+  config.jpeg_quality = 15;
+  config.fb_count = 2;
 
   // Initialisation de la caméra
   esp_err_t err = esp_camera_init(&config);
@@ -130,78 +132,12 @@ void startCamera() {
     Serial.printf("Error while camera init: 0x%x", err);
     ESP.restart();
   }
-}
-
-// Gestionnaire de flux MJPEG
-void handleJpegStream(AsyncWebServerRequest* request) {
-  Serial.println("Starting MJPEG stream...");
-  AsyncWebServerResponse* response = request->beginChunkedResponse("multipart/x-mixed-replace; boundary=frame",
-    [](uint8_t *buffer, size_t maxLen, size_t index) -> size_t {
-      camera_fb_t *fb = esp_camera_fb_get();
-      if (!fb) {
-        Serial.println("Capture failed !");
-        return 0;
-      }
-      Serial.println("Capture succeeded !");
-      size_t len = fb->len;
-      if (len > maxLen) len = maxLen;
-      memcpy(buffer, fb->buf, len);
-      esp_camera_fb_return(fb);
-      Serial.printf("Frame size: %d bytes\n", len);
-      return len;
-    });
-
-  if (response == nullptr) {
-    Serial.println("Failed to create chunked response!");
-  } else {
-    Serial.println("Response created successfully.");
+  sensor_t *s = esp_camera_sensor_get(); // Récupère le capteur
+  if (s != NULL) {
+      s->set_vflip(s, 1); // Active le flip vertical
   }
-
-  response->addHeader("Access-Control-Allow-Origin", "*");
-  request->send(response);
-
-  Serial.println("Response sent.");
-  delay(100);
 }
 
-void handleSingleCapture(AsyncWebServerRequest* request) {
-  Serial.println("Capturing single frame...");
-  camera_fb_t *fb = esp_camera_fb_get();
-  
-  if (!fb) {
-    Serial.println("Single capture failed !");
-    request->send(500, "text/plain", "Capture failed");
-    return;
-  }
-
-  Serial.println("Single capture succeeded !");
-  request->send_P(200, "image/jpeg", fb->buf, fb->len);
-  esp_camera_fb_return(fb);
-}
-
-void handleSimpleStream(AsyncWebServerRequest* request) {
-  Serial.println("Starting simple MJPEG stream...");
-  
-  AsyncWebServerResponse* response = request->beginChunkedResponse(
-    "multipart/x-mixed-replace; boundary=frame",
-    [](uint8_t *buffer, size_t maxLen, size_t index) -> size_t {
-      // Génère une simple chaîne "Hello world" pour tester
-      const char* testFrame = "--frame\r\nContent-Type: text/plain\r\n\r\nHello world!\r\n";
-      size_t len = strlen(testFrame);
-      if (len > maxLen) len = maxLen;
-      memcpy(buffer, testFrame, len);
-      return len;
-    }
-  );
-
-  if (response == nullptr) {
-    Serial.println("Failed to create chunked response!");
-  } else {
-    Serial.println("Simple response created successfully.");
-  }
-
-  request->send(response);
-}
 
 void setup(){
   // Serial port for debugging purposes
@@ -278,10 +214,6 @@ void setup(){
     request->send(200, "text/plain", "OK");
   });
 
-  // server.on("/stream", HTTP_GET, handleJpegStream);
-  // server.on("/stream", HTTP_GET, handleSimpleStream);
-  // server.on("/capture", HTTP_GET, handleSingleCapture);
-  
   // Start server
   server.begin();
   Serial.println("asynch server started on port 80");
@@ -309,7 +241,8 @@ void loop() {
               client.write(fb->buf, fb->len); // Envoie les données JPEG
               client.println();
               esp_camera_fb_return(fb); // Libère le framebuffer
-              // delay(100); // Ajoute un délai pour limiter les FPS
+              // Permet de stabiliser le flux
+              delay(10);
           } else {
               Serial.println("Failed to capture frame.");
           }
