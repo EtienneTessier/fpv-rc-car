@@ -30,7 +30,6 @@ const char* PARAM_INPUT = "value";
 // Create AsyncWebServer object on port 80
 AsyncWebServer server(80);
 
-    // img {display: block; margin: 10px auto; max-width: 100%; height: auto;}
 const char index_html[] PROGMEM = R"rawliteral(
 <!DOCTYPE HTML><html>
 <head>
@@ -40,6 +39,7 @@ const char index_html[] PROGMEM = R"rawliteral(
     html {font-family: Arial; display: inline-block; text-align: center;}
     h2 {font-size: 2.3rem;}
     p {font-size: 1.9rem;}
+    img {display: block; margin: 10px auto; max-width: 100%; height: auto;}
     body {max-width: 400px; margin:0px auto; padding-bottom: 25px;}
     .slider { -webkit-appearance: none; margin: 14px; width: 360px; height: 25px; background: #FFD65C;
       outline: none; -webkit-transition: .2s; transition: opacity .2s;}
@@ -130,6 +130,7 @@ void startCamera() {
     Serial.printf("Erreur lors de l'initialisation de la caméra: 0x%x", err);
     ESP.restart();
   }
+  Serial.println("Caméra initialisée");
 }
 
 // Gestionnaire de flux MJPEG
@@ -141,6 +142,7 @@ void handleJpegStream(AsyncWebServerRequest* request) {
         Serial.println("Échec de capture !");
         return 0;
       }
+      Serial.println("Capture de l'image ok");
       size_t len = fb->len;
       if (len > maxLen) len = maxLen;
       memcpy(buffer, fb->buf, len);
