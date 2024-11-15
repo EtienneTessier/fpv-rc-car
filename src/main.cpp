@@ -29,6 +29,8 @@ const char* PARAM_INPUT = "value";
 
 // Create AsyncWebServer object on port 80
 AsyncWebServer server(80);
+// Port 81 pour le flux MJPEG
+WiFiServer mjpegServer(81);
 
     // img {display: block; margin: 10px auto; max-width: 100%; height: auto;}
 const char index_html[] PROGMEM = R"rawliteral(
@@ -49,7 +51,7 @@ const char index_html[] PROGMEM = R"rawliteral(
 </head>
 <body>
   <h2>Go vroom vroom</h2>
-  <img src='/stream' />
+  <img src="http://%ESP32_IP%:81" alt="Flux vidéo MJPEG" />
   <h3>Direction</h3>
   <p><span id="textSliderValue">%SLIDERVALUE%</span></p>
   <p><input type="range" onchange="updateSliderPWM(this)" id="pwmSlider" min="0" max="180" value="%SLIDERVALUE%" step="1" class="slider"></p>
@@ -81,6 +83,9 @@ function updateThrottlePWM(element) {
 // Replaces placeholder with button section in your web page
 String processor(const String& var){
   //Serial.println(var);
+  if (var == "ESP32_IP") {
+    return WiFi.localIP().toString();
+  }
   if (var == "SLIDERVALUE"){
     return sliderValue;
   }
@@ -114,40 +119,87 @@ void startCamera() {
   config.pixel_format = PIXFORMAT_JPEG;
 
   // Initialisation de la caméra avec résolution
-  if (psramFound()) {
-    config.frame_size = FRAMESIZE_UXGA; // UXGA : 1600x1200
-    config.jpeg_quality = 10;          // Qualité JPEG (10 = haute qualité)
-    config.fb_count = 2;               // Deux framebuffers pour un streaming fluide
-  } else {
-    config.frame_size = FRAMESIZE_SVGA; // SVGA : 800x600
-    config.jpeg_quality = 12;
-    config.fb_count = 1;
-  }
+  config.frame_size = FRAMESIZE_SVGA; // SVGA : 800x600
+  // config.frame_size = FRAMESIZE_QVGA; // QVGA : 320x240
+  config.jpeg_quality = 12;
+  config.fb_count = 1;
 
   // Initialisation de la caméra
   esp_err_t err = esp_camera_init(&config);
   if (err != ESP_OK) {
-    Serial.printf("Erreur lors de l'initialisation de la caméra: 0x%x", err);
+    Serial.printf("Error while camera init: 0x%x", err);
     ESP.restart();
   }
 }
 
 // Gestionnaire de flux MJPEG
 void handleJpegStream(AsyncWebServerRequest* request) {
+  Serial.println("Starting MJPEG stream...");
   AsyncWebServerResponse* response = request->beginChunkedResponse("multipart/x-mixed-replace; boundary=frame",
     [](uint8_t *buffer, size_t maxLen, size_t index) -> size_t {
       camera_fb_t *fb = esp_camera_fb_get();
       if (!fb) {
-        Serial.println("Échec de capture !");
+        Serial.println("Capture failed !");
         return 0;
       }
+      Serial.println("Capture succeeded !");
       size_t len = fb->len;
       if (len > maxLen) len = maxLen;
       memcpy(buffer, fb->buf, len);
       esp_camera_fb_return(fb);
+      Serial.printf("Frame size: %d bytes\n", len);
       return len;
     });
+
+  if (response == nullptr) {
+    Serial.println("Failed to create chunked response!");
+  } else {
+    Serial.println("Response created successfully.");
+  }
+
   response->addHeader("Access-Control-Allow-Origin", "*");
+  request->send(response);
+
+  Serial.println("Response sent.");
+  delay(100);
+}
+
+void handleSingleCapture(AsyncWebServerRequest* request) {
+  Serial.println("Capturing single frame...");
+  camera_fb_t *fb = esp_camera_fb_get();
+  
+  if (!fb) {
+    Serial.println("Single capture failed !");
+    request->send(500, "text/plain", "Capture failed");
+    return;
+  }
+
+  Serial.println("Single capture succeeded !");
+  request->send_P(200, "image/jpeg", fb->buf, fb->len);
+  esp_camera_fb_return(fb);
+}
+
+void handleSimpleStream(AsyncWebServerRequest* request) {
+  Serial.println("Starting simple MJPEG stream...");
+  
+  AsyncWebServerResponse* response = request->beginChunkedResponse(
+    "multipart/x-mixed-replace; boundary=frame",
+    [](uint8_t *buffer, size_t maxLen, size_t index) -> size_t {
+      // Génère une simple chaîne "Hello world" pour tester
+      const char* testFrame = "--frame\r\nContent-Type: text/plain\r\n\r\nHello world!\r\n";
+      size_t len = strlen(testFrame);
+      if (len > maxLen) len = maxLen;
+      memcpy(buffer, testFrame, len);
+      return len;
+    }
+  );
+
+  if (response == nullptr) {
+    Serial.println("Failed to create chunked response!");
+  } else {
+    Serial.println("Simple response created successfully.");
+  }
+
   request->send(response);
 }
 
@@ -196,6 +248,7 @@ void setup(){
     else {
       inputMessage = "No message sent";
     }
+    Serial.print("Direction : ");
     Serial.println(inputMessage);
     request->send(200, "text/plain", "OK");
   });
@@ -220,16 +273,56 @@ void setup(){
     else {
       inputMessage = "No message sent";
     }
+    Serial.print("throttle : ");
     Serial.println(inputMessage);
     request->send(200, "text/plain", "OK");
   });
 
-  server.on("/stream", HTTP_GET, handleJpegStream);
+  // server.on("/stream", HTTP_GET, handleJpegStream);
+  // server.on("/stream", HTTP_GET, handleSimpleStream);
+  // server.on("/capture", HTTP_GET, handleSingleCapture);
   
   // Start server
   server.begin();
+  Serial.println("asynch server started on port 80");
+
+  mjpegServer.begin();
+  Serial.println("MJPEG server started on port 81");
 }
 
 void loop() {
-  
+  WiFiClient client = mjpegServer.available(); // Vérifie si un client est connecté
+  if (client) {
+      Serial.println("Client connected for MJPEG stream.");
+
+      // En-tête HTTP pour le flux MJPEG
+      client.println("HTTP/1.1 200 OK");
+      client.println("Content-Type: multipart/x-mixed-replace; boundary=frame");
+      client.println();
+
+      while (client.connected()) {
+          // Capture une image de la caméra
+          camera_fb_t *fb = esp_camera_fb_get();
+          if (fb) {
+              // En-têtes pour une image JPEG
+              client.printf("--frame\r\nContent-Type: image/jpeg\r\nContent-Length: %u\r\n\r\n", fb->len);
+              client.write(fb->buf, fb->len); // Envoie les données JPEG
+              client.println();
+              esp_camera_fb_return(fb); // Libère le framebuffer
+              // delay(100); // Ajoute un délai pour limiter les FPS
+          } else {
+              Serial.println("Failed to capture frame.");
+          }
+
+          // Vérifie si le client est encore connecté
+          if (!client.connected()) {
+              Serial.println("Client disconnected.");
+              break;
+          }
+      }
+
+      // Ferme la connexion lorsque le client se déconnecte
+      client.stop();
+      Serial.println("MJPEG client stopped.");
+  }
 }
